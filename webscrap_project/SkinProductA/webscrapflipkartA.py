@@ -71,24 +71,7 @@ def get_product_price(soup):
 def get_product_brand(soup):
     product_brand_tag = soup.find("span", class_="VU-ZEz")
     return product_brand_tag.text.strip()[:10] if product_brand_tag else None
-"""
 
-
-def get_product_quantity(soup):
-    rows = soup.find_all("tr")
-    for row in rows:
-        columns = row.find_all("td")
-        if len(columns) == 2:
-            label = columns[0].get_text(strip=True)
-            value_list = columns[1].find_all("li")
-            if "Quantity" in label:
-                if value_list:
-                    return value_list[0].get_text(strip=True)
-                else:
-                    return columns[1].get_text(strip=True)
-    return "Quantity not found"
-
-"""
 
 def get_product_quantity(soup):
     rows = soup.find_all("tr", class_="WJdYP6 row")
