@@ -1,0 +1,153 @@
+version: "3.8"
+
+services:
+  django:
+    build: .
+    container_name: django_app
+    volumes:
+      - .:/app
+    environment:        
+      - POSTGRES_HOST=db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=testdb
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=1234
+    depends_on:
+      db:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      scraper:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+    networks:
+      - mynetwork
+    restart: unless-stopped
+    command: >
+      sh -c "
+        echo 'Waiting for dependencies...' &&
+        ./wait-for-it.sh db:5432 --timeout=600 -- &&
+        ./wait-for-it.sh elasticsearch:9200 --timeout=600 -- &&
+        ./wait-for-it.sh kafka:9092 --timeout=600 -- &&
+
+        echo 'Running Django migrations...' &&
+        python manage.py migrate &&
+
+        echo 'Starting Django server...' &&
+        python manage.py runserver 0.0.0.0:8000
+      "
+  scraper:
+    build: .
+    container_name: python_scraper
+    volumes:
+      - .:/app
+    working_dir: /app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "
+        echo ' Running Scraper...' &&
+        python SkinProductA/fromWebToDatabase.py
+      "
+    networks:
+      - mynetwork
+    restart: "no"
+
+
+
+  db:
+    image: postgres:13
+    container_name: postgres_db
+    environment:
+      - POSTGRES_DB=testdb
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=1234
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      - mynetwork
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.10.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xmx1g -Xms1g
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    networks:
+      - mynetwork
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsSL http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka:
+    image: bitnami/kafka:3.6.0
+    container_name: kafka_broker
+    hostname: kafka
+    networks:
+      - mynetwork
+    environment:
+      - KAFKA_CFG_PROCESS_ROLES=controller,broker
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+      - KAFKA_CFG_LOG_DIRS=/bitnami/kafka/data
+      - ALLOW_PLAINTEXT_LISTENER=yes
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+
+  redis:
+    image: redis:latest
+    container_name: redis_cache
+    ports:
+      - "6379:6379"
+    networks:
+      - mynetwork
+    restart: unless-stopped
+
+  kafka_consumer:
+    build: .
+    container_name: kafka_consumer
+    command: python SkinProductA/consumer_searchdata.py
+    depends_on:
+      - kafka
+    networks:
+      - mynetwork
+
+
+
+volumes:
+  pg_data:
+  es_data:
+  kafka_data:
+
+networks:
+  mynetwork:
+    driver: bridge
